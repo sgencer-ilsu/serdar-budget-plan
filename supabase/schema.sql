@@ -1,100 +1,56 @@
+-- Serdar'ın Bütçe Planı - Supabase veritabanı
+-- Supabase > SQL Editor bölümünde bu dosyanın tamamını bir kez çalıştırın.
 
--- SERDAR BÜTÇE PLANI - SUPABASE SCHEMA
--- Supabase > SQL Editor > New query içine yapıştırıp Run'a basın.
-
-create extension if not exists pgcrypto;
-
-create table if not exists public.incomes (
-  id uuid primary key default gen_random_uuid(),
-  user_id uuid not null references auth.users(id) on delete cascade,
-  month text not null,
-  name text not null,
-  amount numeric(14,2) not null default 0,
-  created_at timestamptz not null default now()
-);
-
-create table if not exists public.cards (
-  id uuid primary key default gen_random_uuid(),
-  user_id uuid not null references auth.users(id) on delete cascade,
-  name text not null,
-  cutoff_day int,
-  due_day int,
+create table if not exists public.budget_profiles (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  state jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now(),
-  unique(user_id,name)
+  updated_at timestamptz not null default now()
 );
 
-create table if not exists public.card_months (
-  id uuid primary key default gen_random_uuid(),
-  user_id uuid not null references auth.users(id) on delete cascade,
-  card_id uuid not null references public.cards(id) on delete cascade,
-  month text not null,
-  current_spend numeric(14,2) not null default 0,
-  carried numeric(14,2) not null default 0,
-  interest numeric(14,2) not null default 0,
-  paid_amount numeric(14,2) not null default 0,
-  created_at timestamptz not null default now(),
-  unique(card_id,month)
-);
+alter table public.budget_profiles enable row level security;
 
-create table if not exists public.cash_advances (
-  id uuid primary key default gen_random_uuid(),
-  user_id uuid not null references auth.users(id) on delete cascade,
-  bank text not null,
-  description text,
-  due_date date,
-  original_amount numeric(14,2) not null,
-  remaining_amount numeric(14,2) not null,
-  paid boolean not null default false,
-  created_at timestamptz not null default now()
-);
+drop policy if exists "Kullanici kendi butcesini okuyabilir" on public.budget_profiles;
+create policy "Kullanici kendi butcesini okuyabilir"
+on public.budget_profiles for select
+to authenticated
+using ((select auth.uid()) = user_id);
 
-create table if not exists public.fixed_expenses (
-  id uuid primary key default gen_random_uuid(),
-  user_id uuid not null references auth.users(id) on delete cascade,
-  name text not null,
-  amount numeric(14,2) not null,
-  due_day int,
-  created_at timestamptz not null default now()
-);
+drop policy if exists "Kullanici kendi butcesini olusturabilir" on public.budget_profiles;
+create policy "Kullanici kendi butcesini olusturabilir"
+on public.budget_profiles for insert
+to authenticated
+with check ((select auth.uid()) = user_id);
 
-create table if not exists public.expenses (
-  id uuid primary key default gen_random_uuid(),
-  user_id uuid not null references auth.users(id) on delete cascade,
-  expense_date date not null,
-  category text not null,
-  description text,
-  amount numeric(14,2) not null,
-  payment_method text not null,
-  card_name text,
-  installments int not null default 1,
-  created_at timestamptz not null default now()
-);
+drop policy if exists "Kullanici kendi butcesini guncelleyebilir" on public.budget_profiles;
+create policy "Kullanici kendi butcesini guncelleyebilir"
+on public.budget_profiles for update
+to authenticated
+using ((select auth.uid()) = user_id)
+with check ((select auth.uid()) = user_id);
 
-create table if not exists public.payments (
-  id uuid primary key default gen_random_uuid(),
-  user_id uuid not null references auth.users(id) on delete cascade,
-  payment_date date not null,
-  kind text not null,
-  target_id uuid,
-  amount numeric(14,2) not null,
-  note text,
-  created_at timestamptz not null default now()
-);
+drop policy if exists "Kullanici kendi butcesini silebilir" on public.budget_profiles;
+create policy "Kullanici kendi butcesini silebilir"
+on public.budget_profiles for delete
+to authenticated
+using ((select auth.uid()) = user_id);
 
-alter table public.incomes enable row level security;
-alter table public.cards enable row level security;
-alter table public.card_months enable row level security;
-alter table public.cash_advances enable row level security;
-alter table public.fixed_expenses enable row level security;
-alter table public.expenses enable row level security;
-alter table public.payments enable row level security;
-
-do $$
-declare t text;
+create or replace function public.set_updated_at()
+returns trigger
+language plpgsql
+security invoker
+set search_path = public
+as $$
 begin
-  foreach t in array array['incomes','cards','card_months','cash_advances','fixed_expenses','expenses','payments']
-  loop
-    execute format('drop policy if exists "own rows" on public.%I', t);
-    execute format('create policy "own rows" on public.%I for all using (auth.uid() = user_id) with check (auth.uid() = user_id)', t);
-  end loop;
-end $$;
+  new.updated_at = now();
+  return new;
+end;
+$$;
+
+drop trigger if exists budget_profiles_set_updated_at on public.budget_profiles;
+create trigger budget_profiles_set_updated_at
+before update on public.budget_profiles
+for each row execute function public.set_updated_at();
+
+grant usage on schema public to authenticated;
+grant select, insert, update, delete on public.budget_profiles to authenticated;

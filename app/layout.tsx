@@ -1,0 +1,1 @@
+import type {Metadata} from "next";import "./globals.css";export const metadata:Metadata={title:"Serdar'ın Bütçe Planı",description:"Gelir, borç ve aylık harcamalar için kişisel bütçe planlayıcısı.",icons:{icon:"/favicon.svg"}};export default function RootLayout({children}:{children:React.ReactNode}){return <html lang="tr"><body>{children}</body></html>}

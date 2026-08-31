@@ -1,58 +1,65 @@
-# Serdar Bütçe Planı — GitHub + Vercel + Supabase
+# Serdar’ın Bütçe Planı — Supabase sürümü
 
-Bu sürüm SQLite/Flask yerine tarayıcıdan Supabase'e bağlanır. Böylece telefon, iPad, Mac ve Windows aynı veriyi görür.
+Bu proje, son hazırlanan bütçe uygulamasının görünümünü ve hesaplama kurallarını korur. Tek farkı, verileri yalnızca tarayıcıda değil Supabase veritabanında saklamasıdır. Böylece aynı hesapla telefon ve bilgisayarda aynı bütçe açılır.
 
-## 1. Supabase
-1. https://supabase.com adresinde yeni proje oluştur.
-2. SQL Editor > New query aç.
-3. `supabase/schema.sql` içeriğini yapıştırıp **Run**.
-4. Project Settings > API bölümünden:
-   - Project URL
-   - anon / public key
-   bilgilerini al.
+## Özellikler
 
-## 2. Yerelde çalıştırma
-1. `.env.example` dosyasını `.env` olarak kopyala.
-2. Değerleri kendi Supabase bilgilerinle doldur:
-   VITE_SUPABASE_URL=...
-   VITE_SUPABASE_ANON_KEY=...
-3. Terminal:
-   npm install
-   npm run dev
+- Garanti ve DenizBank ekstrelerini kesim/ödeme tarihlerine göre hesaplama
+- Dönem içi, devreden, faiz ve toplam kart borcunu ayrı gösterme
+- Nakit, Garanti KK ve DenizBank KK ile harcama girişi
+- Aylık tekrarlanan taksit mantığı
+- Kategori grafikleri ve harcama ayrıntıları
+- Gelir, sabit gider, nakit avans ve gerçekleşen ödeme takibi
+- Supabase üzerinde kullanıcıya özel ve RLS ile korunan veri
+- Değişikliklerden sonra otomatik bulut kaydı
+- Bulutta kayıt yoksa aynı alan adındaki eski `localStorage` verisini ilk açılışta devralma
 
-## 3. GitHub
-1. GitHub'da örn. `serdar-butce-plani` repository oluştur.
-2. Bu klasörün tamamını yükle.
-3. `.env` dosyasını GitHub'a yükleme. `.gitignore` zaten engelliyor.
+## 1. Supabase veritabanını hazırlama
 
-## 4. Vercel
-1. Vercel > Add New > Project.
-2. GitHub repository'yi seç.
-3. Framework Preset: Vite.
-4. Environment Variables'a:
-   VITE_SUPABASE_URL
-   VITE_SUPABASE_ANON_KEY
-   ekle.
-5. Deploy.
+1. Supabase projenizi açın.
+2. **SQL Editor → New query** bölümüne girin.
+3. [`supabase/schema.sql`](supabase/schema.sql) dosyasının tamamını yapıştırıp **Run** düğmesine basın.
+4. **Authentication → Providers → Email** bölümünde e-posta ile girişin açık olduğunu kontrol edin.
+5. Onay e-postası kullanmak istemiyorsanız **Confirm email** seçeneğini kapatın.
 
-## 5. İlk giriş
-- Site açılınca e-posta ve şifre yaz.
-- "İlk kez kullanıyorum · Hesap oluştur" ile hesap oluştur.
-- Supabase Auth ayarına göre e-posta doğrulaması gerekebilir.
-- İlk girişten sonra "Başlangıç verilerini yükle" düğmesi görünür.
+SQL dosyası her kullanıcıya yalnızca kendi bütçe kaydını okuma ve değiştirme izni verir. Uygulamada `service_role` anahtarı kullanılmaz.
 
-## Güvenlik
-- Supabase Row Level Security açık.
-- Her kullanıcı yalnızca kendi satırlarını görebilir.
-- Anon key'in tarayıcıda bulunması normaldir; güvenlik RLS ile sağlanır.
-- Service Role key'i ASLA Vercel frontend değişkenlerine koyma.
+## 2. Ortam değişkenleri
 
-## Uygulamadaki son istekler
-- Kartlarda Dönem İçi / Devreden / Faiz ayrı.
-- Ödeme alanları boş gelir.
-- Otomatik ödeme önerisi yok.
-- "En az faiz" bölümü yok.
-- Sayısal inputlarda +/- buton mantığı yok; normal tutar alanı var.
-- Nakit avans ayrı borç türü ve ödeme yapıldıkça kalan tutar düşer.
+`.env.example` dosyasını `.env.local` adıyla kopyalayın ve Supabase değerlerinizi ekleyin:
 
-Not: Garanti nakit avansının kesin tutarı bilinmediği için başlangıç seed verisine eklenmedi.
+```env
+NEXT_PUBLIC_SUPABASE_URL=https://PROJE_KODUNUZ.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=sb_publishable_xxxxxxxxxxxxxxxxx
+```
+
+Publishable key’i `sb_publishable_` kısmıyla birlikte eksiksiz yapıştırın.
+
+## 3. Bilgisayarda çalıştırma
+
+```bash
+npm install
+npm run dev
+```
+
+Ardından `http://localhost:3000` adresini açın.
+
+## 4. Vercel’e yayınlama
+
+1. Bu klasörü GitHub’daki boş projenize yükleyin.
+2. Vercel’de **Add New → Project** ile GitHub projesini seçin.
+3. **Environment Variables** bölümüne şu iki değeri ekleyin:
+   - `NEXT_PUBLIC_SUPABASE_URL`
+   - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+4. **Deploy** düğmesine basın.
+5. Supabase’de **Authentication → URL Configuration** bölümünde Vercel adresinizi **Site URL** olarak yazın.
+
+## Veri saklama mantığı
+
+Uygulamanın bütün bütçe durumu `public.budget_profiles` tablosundaki tek bir JSONB kaydında tutulur. Kayıt anahtarı giriş yapan kullanıcının Supabase kullanıcı kimliğidir. Değişiklikler 650 ms bekleme sonrasında tek seferde kaydedilir; art arda hızlı girişler gereksiz veritabanı isteği oluşturmaz.
+
+## Önemli
+
+- `.env.local` dosyasını GitHub’a yüklemeyin.
+- Supabase `service_role` secret key’ini kesinlikle tarayıcı uygulamasına veya Vercel’de `NEXT_PUBLIC_` isimli bir değişkene koymayın.
+- Yeni bir alan adında açılan uygulama, eski sitenin tarayıcı verisine tarayıcı güvenliği nedeniyle doğrudan erişemez. Eski verilerin aktarılması gerekiyorsa mevcut siteden dışa aktarma ve bu projede içe aktarma adımı eklenebilir.
