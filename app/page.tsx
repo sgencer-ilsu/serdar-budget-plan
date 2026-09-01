@@ -23,6 +23,9 @@ import { isSupabaseConfigured, supabase } from "@/lib/supabase";
 type M = "Eylül" | "Ekim" | "Kasım" | "Aralık";
 type SpendingMonth = "Ağustos" | M;
 type Method = "cash" | "garanti" | "deniz";
+type CardBank = Exclude<Method, "cash">;
+type CardDateSetting = { cutoffDay: number; dueDay: number };
+type CardDates = Record<CardBank, Record<SpendingMonth, CardDateSetting>>;
 type Spending = {
   id: string;
   name: string;
@@ -39,6 +42,22 @@ type SpendingDraft = Omit<Spending, "id" | "category"> & {
 
 const months: M[] = ["Eylül", "Ekim", "Kasım", "Aralık"];
 const spendingMonths: SpendingMonth[] = ["Ağustos", ...months];
+const defaultCardDates: CardDates = {
+  garanti: {
+    Ağustos: { cutoffDay: 28, dueDay: 7 },
+    Eylül: { cutoffDay: 28, dueDay: 7 },
+    Ekim: { cutoffDay: 28, dueDay: 7 },
+    Kasım: { cutoffDay: 28, dueDay: 7 },
+    Aralık: { cutoffDay: 28, dueDay: 7 },
+  },
+  deniz: {
+    Ağustos: { cutoffDay: 12, dueDay: 20 },
+    Eylül: { cutoffDay: 12, dueDay: 20 },
+    Ekim: { cutoffDay: 12, dueDay: 20 },
+    Kasım: { cutoffDay: 12, dueDay: 20 },
+    Aralık: { cutoffDay: 12, dueDay: 20 },
+  },
+};
 const currentSpendingMonth = () => {
   const index = Math.max(
     0,
@@ -69,12 +88,6 @@ const cleaning: Record<M, number> = {
 const openingCardDebt = {
   garanti: { carried: 227000, period: 230000 },
   deniz: { carried: 40000, period: 0 },
-};
-const payDate = {
-  Eylül: "7 Eylül",
-  Ekim: "7 Ekim",
-  Kasım: "7 Kasım",
-  Aralık: "7 Aralık",
 };
 const calendarMonths = [
   "Eylül",
@@ -154,6 +167,7 @@ const initial = {
   completedCashAdvance: {} as Partial<Record<M, boolean>>,
   spendings: [] as Spending[],
   categories: defaultCategories,
+  cardDates: defaultCardDates,
   interest: 4.25,
   tax: 30,
   income: {
@@ -169,11 +183,12 @@ const methodName: Record<Method, string> = {
   garanti: "Garanti KK",
   deniz: "DenizBank KK",
 };
-const firstDueIndex = (x: Spending) => {
+const firstDueIndex = (x: Spending, cardDates: CardDates) => {
   const i = spendingMonths.indexOf(x.month) - 1;
   if (x.method === "cash") return i;
-  if (x.method === "garanti") return i + (x.day <= 28 ? 1 : 2);
-  return i + (x.day <= 12 ? 0 : 1);
+  const cutoff = cardDates[x.method][x.month].cutoffDay;
+  if (x.method === "garanti") return i + (x.day <= cutoff ? 1 : 2);
+  return i + (x.day <= cutoff ? 0 : 1);
 };
 const spendingInMonth = (x: Spending, m: SpendingMonth) => {
   const monthIndex = spendingMonths.indexOf(m);
@@ -255,6 +270,16 @@ export default function Home() {
       },
       completedPayments: saved.completedPayments ?? {},
       completedCashAdvance: saved.completedCashAdvance ?? {},
+      cardDates: {
+        garanti: {
+          ...initial.cardDates.garanti,
+          ...saved.cardDates?.garanti,
+        },
+        deniz: {
+          ...initial.cardDates.deniz,
+          ...saved.cardDates?.deniz,
+        },
+      },
       categories: Array.from(
         new Set([...defaultCategories, ...(saved.categories ?? [])]),
       ),
@@ -328,18 +353,33 @@ export default function Home() {
     Number(data.income.lessons[m]) +
     Number(data.income.rent[m]);
   const rate = (data.interest / 100) * (1 + data.tax / 100);
+  const dueDayFor = (bank: CardBank, dueIndex: number) => {
+    const statementIndex = bank === "garanti" ? dueIndex : dueIndex + 1;
+    const statementMonth = spendingMonths[statementIndex];
+    return statementMonth
+      ? data.cardDates[bank][statementMonth].dueDay
+      : bank === "garanti"
+        ? 7
+        : 20;
+  };
+  const cardDueDate = (bank: CardBank, month: M) =>
+    `${dueDayFor(bank, months.indexOf(month))} ${month}`;
+  const dueMonthForStatement = (bank: CardBank, statementIndex: number) =>
+    bank === "garanti"
+      ? calendarMonths[statementIndex]
+      : spendingMonths[statementIndex];
   const cardCharge = (method: Method, dueIndex: number) =>
     data.spendings
       .filter((x) => x.method === method)
       .reduce((sum, x) => {
-        const start = firstDueIndex(x),
+        const start = firstDueIndex(x, data.cardDates),
           n = Math.max(1, x.installments);
         return sum + (dueIndex >= start && dueIndex < start + n ? x.amount : 0);
       }, 0);
   const futureCardDebt = data.spendings
     .filter((x) => x.method !== "cash")
     .reduce((sum, x) => {
-      const start = firstDueIndex(x),
+      const start = firstDueIndex(x, data.cardDates),
         n = Math.max(1, x.installments),
         paidSlots = Math.max(0, Math.min(n, 4 - start));
       return sum + x.amount * (n - paidSlots);
@@ -489,6 +529,25 @@ export default function Home() {
         [m]: !x.completedCashAdvance[m],
       },
     }));
+  const updateCardDate = (
+    bank: CardBank,
+    month: SpendingMonth,
+    field: keyof CardDateSetting,
+    value: number,
+  ) =>
+    setData((x) => ({
+      ...x,
+      cardDates: {
+        ...x.cardDates,
+        [bank]: {
+          ...x.cardDates[bank],
+          [month]: {
+            ...x.cardDates[bank][month],
+            [field]: Math.max(1, Math.min(31, value || 1)),
+          },
+        },
+      },
+    }));
   const openNewSpending = () => {
     setEditingSpendingId(null);
     setDraft(emptyDraft(data.categories[0] || "Market"));
@@ -565,9 +624,9 @@ export default function Home() {
   );
   const dueText = (x: Spending) => {
     if (x.method === "cash") return `${x.day} ${x.month} · nakit`;
-    const due = firstDueIndex(x),
+    const due = firstDueIndex(x, data.cardDates),
       label = due === -1 ? "Ağustos" : calendarMonths[due] || "2027",
-      day = x.method === "garanti" ? 7 : 20;
+      day = dueDayFor(x.method, due);
     return `${x.day} ${x.month} işlemi · ${x.installments} ay × ${fmt.format(x.amount)} · toplam ${fmt.format(x.amount * x.installments)} · ilk ödeme ${day} ${label}`;
   };
   const categoryDetailItems = categoryDetail
@@ -582,7 +641,8 @@ export default function Home() {
             spendingMonths.indexOf(chartMonth) -
             spendingMonths.indexOf(x.month) +
             1;
-          const due = firstDueIndex(x) + installment - 1;
+          const due =
+            firstDueIndex(x, data.cardDates) + installment - 1;
           const dueMonth =
             due === -1 ? "Ağustos" : calendarMonths[due] || "2027";
           return {
@@ -591,7 +651,7 @@ export default function Home() {
             paymentDate:
               x.method === "cash"
                 ? `${x.day} ${x.month} · nakit ödendi`
-                : `${x.method === "garanti" ? 7 : 20} ${dueMonth} kart ödemesi`,
+                : `${dueDayFor(x.method, due)} ${dueMonth} kart ödemesi`,
           };
         })
         .sort(
@@ -778,6 +838,93 @@ export default function Home() {
             <p className="eyebrow">AYLIK NAKİT AKIŞI</p>
             <h2>Ayın 20’sine kadar kapanacak ödemeler</h2>
           </div>
+          <Dialog>
+            <DialogTrigger asChild>
+              <button className="card-dates-button" type="button">
+                Kart tarihleri
+              </button>
+            </DialogTrigger>
+            <DialogContent className="card-dates-dialog">
+              <DialogHeader>
+                <DialogTitle>Hesap kesim ve son ödeme tarihleri</DialogTitle>
+                <DialogDescription>
+                  Normal tarihler hazırdır. Banka bir ay tarihi değiştirdiğinde
+                  yalnızca ilgili satırı güncelle; kart harcamaları otomatik
+                  olarak doğru ekstreye yeniden dağıtılır.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="card-date-banks">
+                {(["garanti", "deniz"] as CardBank[]).map((bank) => (
+                  <section className="card-date-bank" key={bank}>
+                    <div className="card-date-bank-head">
+                      <h3>
+                        {bank === "garanti"
+                          ? "Garanti Bankası"
+                          : "DenizBank"}
+                      </h3>
+                      <span>
+                        Normal: kesim {bank === "garanti" ? 28 : 12} · ödeme{" "}
+                        {bank === "garanti" ? 7 : 20}
+                      </span>
+                    </div>
+                    <div className="card-date-table-head">
+                      <b>Ekstre dönemi</b>
+                      <b>Hesap kesim</b>
+                      <b>Son ödeme</b>
+                    </div>
+                    {spendingMonths.map((statementMonth, statementIndex) => (
+                      <div className="card-date-row" key={statementMonth}>
+                        <span>{statementMonth}</span>
+                        <label>
+                          <input
+                            aria-label={`${statementMonth} ${bank} hesap kesim günü`}
+                            type="number"
+                            min="1"
+                            max="31"
+                            value={
+                              data.cardDates[bank][statementMonth].cutoffDay
+                            }
+                            onChange={(event) =>
+                              updateCardDate(
+                                bank,
+                                statementMonth,
+                                "cutoffDay",
+                                Number(event.target.value),
+                              )
+                            }
+                          />
+                          <small>{statementMonth}</small>
+                        </label>
+                        <label>
+                          <input
+                            aria-label={`${statementMonth} ${bank} son ödeme günü`}
+                            type="number"
+                            min="1"
+                            max="31"
+                            value={data.cardDates[bank][statementMonth].dueDay}
+                            onChange={(event) =>
+                              updateCardDate(
+                                bank,
+                                statementMonth,
+                                "dueDay",
+                                Number(event.target.value),
+                              )
+                            }
+                          />
+                          <small>
+                            {dueMonthForStatement(bank, statementIndex)}
+                          </small>
+                        </label>
+                      </div>
+                    ))}
+                  </section>
+                ))}
+              </div>
+              <p className="card-date-save-note">
+                Değişiklikler otomatik olarak buluta kaydedilir.
+              </p>
+            </DialogContent>
+          </Dialog>
         </div>
         <div className="flow-grid">
           {rows.map((r) => (
@@ -889,7 +1036,7 @@ export default function Home() {
                   }
                 >
                   <div className="card-due">
-                    <span>{payDate[r.m]} · Garanti ekstresi</span>
+                    <span>{cardDueDate("garanti", r.m)} · Garanti ekstresi</span>
                   </div>
                   <div className="card-breakdown">
                     <div>
@@ -964,7 +1111,7 @@ export default function Home() {
                   }
                 >
                   <div className="card-due">
-                    <span>20 {r.m} · DenizBank ekstresi</span>
+                    <span>{cardDueDate("deniz", r.m)} · DenizBank ekstresi</span>
                   </div>
                   <div className="card-breakdown">
                     <div>
@@ -1458,7 +1605,7 @@ export default function Home() {
             <strong>{fmt.format(nextGaranti.amount)}</strong>
             <small>
               {nextGaranti.month
-                ? `${payDate[nextGaranti.month]} tarihinde ödenecek`
+                ? `${cardDueDate("garanti", nextGaranti.month)} tarihinde ödenecek`
                 : "Plan dönemindeki ekstreler ödendi"}
             </small>
           </div>
@@ -1467,7 +1614,7 @@ export default function Home() {
             <strong>{fmt.format(nextDeniz.amount)}</strong>
             <small>
               {nextDeniz.month
-                ? `20 ${nextDeniz.month} tarihinde ödenecek`
+                ? `${cardDueDate("deniz", nextDeniz.month)} tarihinde ödenecek`
                 : "Plan dönemindeki ekstreler ödendi"}
             </small>
           </div>
